@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<style>
+
+.links line {
+  stroke: #999;
+  stroke-opacity: 0.0;
+}
+
+.nodes circle {
+  stroke: #fff;
+  stroke-width: 1.5px;
+}
+
+.label {
+  font-family: Helvetica;
+  text-anchor: middle;
+  opacity: 0.8;
+}
+</style>
+<svg width="1000" height="1000"></svg>
+<script src="https://d3js.org/d3.v4.min.js"></script>
+<script src="https://d3js.org/d3-scale-chromatic.v1.min.js"></script>
+<script src="https://www.dl.dropboxusercontent.com/s/rq4iyivyfjngq09/convexhull.js"></script>
+<script>
+function incrDistance(pointA, pointB, byDist){
+  var diffX = pointA.x-pointB.x,
+      diffY = pointA.y-pointB.y;
+  var angle = Math.atan(diffY/diffX) + (Math.sign(diffX)+1)*pi/2*Math.sign(diffY)*-1;
+  var distance = Math.pow(Math.pow(diffX,2) + Math.pow(diffY,2),1/2);
+  var distanceTr = distance + byDist;
+  var diffXTr = Math.cos(angle)*distanceTr,
+      diffYTr = Math.sin(angle)*distanceTr;
+  return {'x': pointB.x - diffXTr, 'y': pointB.y - diffYTr};
+}
+function svgPolygonFromOutline(curves){
+    var polygon = "";
+    curves.forEach(function(curve){
+        curve.forEach(function(point){
+            polygon += " " + point.x + "," + point.y;
+        });
+    });
+    return polygon;
+}
+function incrDistanceProp(pointA, pointB, byFactor){
+  var diffX = pointA.x-pointB.x,
+      diffY = pointA.y-pointB.y;
+  var angle = Math.atan(diffY/diffX) + (Math.sign(diffX)+1)*pi/2*Math.sign(diffY)*-1;
+  var distance = Math.pow(Math.pow(diffX,2) + Math.pow(diffY,2),1/2);
+  var distanceTr = distance * byFactor;
+  var diffXTr = Math.cos(angle)*distanceTr,
+      diffYTr = Math.sin(angle)*distanceTr;
+  return {'x': pointB.x - diffXTr, 'y': pointB.y - diffYTr};
+}
+
+function pointOnBezier(ptA, ptB, ctrlPtA, ctrlPtB, t){
+    x = Math.pow((1-t),3)*ptA.x + 3*Math.pow((1-t),2)*t*ctrlPtA.x + 3*(1-t)*Math.pow(t,2)*ctrlPtB.x + Math.pow(t,3)*ptB.x;
+    y = Math.pow((1-t),3)*ptA.y + 3*Math.pow((1-t),2)*t*ctrlPtA.y + 3*(1-t)*Math.pow(t,2)*ctrlPtB.y + Math.pow(t,3)*ptB.y;
+    
+    return {'x': x, 'y': y};
+}
+
+function geomCenter(ptsArray){
+    var sumX = 0;
+    var sumY = 0;
+    ptsArray.forEach(function(pt){
+        sumX += pt.x;
+        sumY += pt.y;
+    });
+    return {'x': sumX/ptsArray.length, 'y':sumY/ptsArray.length};
+}
+
+function fanPts(pointA, pointB, d){
+    var diffX = pointA.x-pointB.x,
+      diffY = pointA.y-pointB.y;
+    var angle, dx, dy, pt1, pt2 ;
+    // angle = Math.abs(Math.atan(diffY/diffX));
+    // dx = Math.sin(angle) * d;
+    // dy = Math.cos(angle) * d;
+    // pt1 = {'x': pointA.x + dx * Math.sign(diffY), 'y': pointA.y + dy * Math.sign(diffY) * -1};
+    // pt2 = {'x': pointA.x + dx * Math.sign(diffY) * -1, 'y': pointA.y + dy * Math.sign(diffY)};
+
+    if (diffY == 0 && diffX == 0 ){
+        pt1 = {'x': pointA.x, 'y': pointA.y};
+        pt2 = {'x': pointA.x, 'y': pointA.y};
+    } else if (diffY == 0){
+        pt1 = {'x': pointA.x + d, 'y': pointA.y};
+        pt2 = {'x': pointA.x - d, 'y': pointA.y};     
+    } else if (diffX == 0){
+        pt1 = {'x': pointA.x, 'y': pointA.y + d};
+        pt2 = {'x': pointA.x, 'y': pointA.y - d}; 
+    } else if (diffY > 0 && diffX > 0 ){
+        // első negyed
+        angle = Math.abs(Math.atan(diffY/diffX));
+        dx = Math.sin(angle) * d;
+        dy = Math.cos(angle) * d;
+        pt1 = {'x': pointA.x + dx, 'y': pointA.y - dy};
+        pt2 = {'x': pointA.x - dx, 'y': pointA.y + dy};
+    } else if(diffY > 0 && diffX < 0 ){
+        // második negyed
+        angle = Math.abs(Math.atan(diffY/diffX));
+        dx = Math.sin(angle) * d;
+        dy = Math.cos(angle) * d;
+        pt1 = {'x': pointA.x + dx, 'y': pointA.y + dy};
+        pt2 = {'x': pointA.x - dx, 'y': pointA.y - dy};
+    } else if(diffY < 0 && diffX < 0 ){
+        // harmadik negyed
+        angle = Math.abs(Math.atan(diffY/diffX));
+        dx = Math.sin(angle) * d;
+        dy = Math.cos(angle) * d;
+        pt1 = {'x': pointA.x - dx, 'y': pointA.y + dy};
+        pt2 = {'x': pointA.x + dx, 'y': pointA.y - dy};
+    } else if(diffY < 0 && diffX > 0 ){
+        angle = Math.abs(Math.atan(diffY/diffX));
+        dx = Math.sin(angle) * d;
+        dy = Math.cos(angle) * d;
+        pt1 = {'x': pointA.x - dx, 'y': pointA.y - dy};
+        pt2 = {'x': pointA.x + dx, 'y': pointA.y + dy};
+    }
+    return [pt1, pt2];
+}
+
+function extendPts(startPt, endPt, f){
+    var center = geomCenter([startPt, endPt]);
+    var pt1 = incrDistanceProp(startPt, center, 0.2);
+    var pt2 = incrDistanceProp(endPt, center, 0.2);
+    return [pt1, pt2];
+}
+function smoothOutline(pointArray, fanning = 50, eFactor = 0.2, padding = 30){
+    var polygonCenter = geomCenter(pointArray);
+    outerPoints = pointArray.map(function(pt){ return incrDistance(pt, polygonCenter, padding);});
+
+    var btwnPoints = [];
+    for (i=0; i< pointArray.length; i++){
+        if (i < pointArray.length-1){
+            btwnPoints.push(incrDistance(geomCenter([pointArray[i], pointArray[i+1]]), polygonCenter, 0));
+        } else {
+            btwnPoints.push(incrDistance(geomCenter([pointArray[i], pointArray[0]]), polygonCenter, 0));
+        }
+    }
+    var bezierData = [];
+
+    for (i = 0; i<pointArray.length; i++){
+        if (i < pointArray.length-1){
+            bezierData.push({
+                "ptA": outerPoints[i],
+                "ptB": btwnPoints[i],
+                "ctrlPtA": fanPts(outerPoints[i], polygonCenter, fanning)[1],
+                "ctrlPtB": incrDistanceProp(pointArray[i], btwnPoints[i], eFactor)
+            });
+            bezierData.push({
+                "ptA": btwnPoints[i],
+                "ptB": outerPoints[i + 1],
+                "ctrlPtA": incrDistanceProp(pointArray[i + 1], btwnPoints[i],  eFactor),
+                "ctrlPtB": fanPts(outerPoints[i + 1], polygonCenter, fanning)[0]
+            });
+        } else {
+            bezierData.push({
+                "ptA": outerPoints[i],
+                "ptB": btwnPoints[i],
+                "ctrlPtA": fanPts(outerPoints[i], polygonCenter, fanning)[1],
+                "ctrlPtB": incrDistanceProp(pointArray[i], btwnPoints[i], eFactor)
+            });
+            bezierData.push({
+                "ptA": btwnPoints[i],
+                "ptB": outerPoints[0],
+                "ctrlPtA": incrDistanceProp(pointArray[0],btwnPoints[i], eFactor),
+                "ctrlPtB": fanPts(outerPoints[0], polygonCenter, fanning)[0]
+            });
+        }
+    }
+    
+    var bezierPaths = [] 
+    bezierData.forEach(function(dataArray){
+        var path = []
+        var steps = 30
+        for (i = 0; i < 1; i = i + 1/steps){
+            path.push(pointOnBezier(dataArray.ptA, dataArray.ptB, dataArray.ctrlPtA, dataArray.ctrlPtB, i));
+        }
+        bezierPaths.push(path);
+    })
+    return bezierPaths;
+}
+
+function convexHullCW(ptsArray){
+    var original = convexHull(ptsArray);
+    var hullLength = original.length
+    var reverseHull = []
+
+    for (i = 0; i < hullLength; i++){
+        pushArray = original[hullLength-i-1]
+        reverseHull.push(original[hullLength-i-1]);
+    }
+    return reverseHull;
+} 
+
+function geomCenter(ptsArray){
+  var sumX = 0;
+  var sumY = 0;
+  ptsArray.forEach(function(pt){
+      sumX += pt.x;
+      sumY += pt.y;
+  });
+  return {'x': sumX/ptsArray.length, 'y':sumY/ptsArray.length};
+}
+
+var svg = d3.select("svg"),
+    width = +svg.attr("width"),
+    height = +svg.attr("height");
+
+var color = d3.scaleOrdinal(d3.schemeSet2);
+
+var dimRadius = 62,
+    charge = -1500,
+    smallRadius = 15,
+    linkStrength = 300,
+    pi = Math.PI;
+
+var simulation = d3.forceSimulation()
+    .force("link", d3.forceLink().id(function(d) { return d.id; }))
+    .force("charge", d3.forceManyBody().strength(function(d){
+      if (!d.selected) {
+        return charge
+      } else{
+        return -500
+      }
+    }))
+    //.force("center", d3.forceCenter(width / 2, height / 2))
+    .alpha(0.1)
+    .alphaTarget(0.005)
+    .alphaDecay(0.005);
+/*
+function incrDistance(pointA, pointB, byDist){
+  var diffX = pointA.x-pointB.x,
+      diffY = pointA.y-pointB.y;
+  var angle = Math.atan(diffY/diffX) + (Math.sign(diffX)+1)*pi/2*Math.sign(diffY)*-1;
+  var distance = Math.pow(Math.pow(diffX,2) + Math.pow(diffY,2),1/2);
+  var distanceTr = distance + byDist;
+  var diffXTr = Math.cos(angle)*distanceTr,
+      diffYTr = Math.sin(angle)*distanceTr;
+  return [pointB.x - diffXTr, pointB.y - diffYTr];
+}*/
+/*
+function incrDistanceProp(pointA, pointB, byFactor){
+  var diffX = pointA.x-pointB.x,
+      diffY = pointA.y-pointB.y;
+  var angle = Math.atan(diffY/diffX) + (Math.sign(diffX)+1)*pi/2*Math.sign(diffY)*-1;
+  var distance = Math.pow(Math.pow(diffX,2) + Math.pow(diffY,2),1/2);
+  var distanceTr = distance * byFactor;
+  var diffXTr = Math.cos(angle)*distanceTr,
+      diffYTr = Math.sin(angle)*distanceTr;
+  return [pointB.x - diffXTr, pointB.y - diffYTr];
+}*/
+
+
+d3.json("https://www.dl.dropboxusercontent.com/s/ul1f7jx1m274kx8/nodes.json", function(error, graph) {
+
+  if (error) throw error;
+
+  graph.links = [];
+  graph.nodes.forEach(function(node){
+    node.selected = false;
+    if (node.type !== "dimenzió"){
+      node.r = smallRadius;
+      node.color = color(node.parent);
+      node.opacity = 0.6;
+      graph.nodes.forEach(function(searchnode){
+        if (searchnode.id===node.parent){
+          node.parentnode = searchnode;
+          graph.links.push({"source": node, "target": searchnode, "focus": false});
+        }
+      });
+    } else {
+      node.r = dimRadius;
+      node.color = color(node.id);
+      node.opacity = 1;
+    }
+  });
+  var backgroundPolygon = svg.append("polygon").attr("fill-opacity", 0.2)
+
+  var link = svg.append("g")
+      .attr("class", "links")
+      .selectAll("line")
+      .data(graph.links)
+      .enter().append("line")
+      .attr("stroke-width", 1);
+
+  console.log(graph);
+  var i = 1;
+  var j = 1;
+  graph.nodes.forEach(function(node){
+    if (node.type === "dimenzió"){
+      node.fx = width/2 + 250 * Math.sin(i*2*pi/4);
+      node.fy = height/2 + 250 * Math.cos(i*2*pi/4);
+      node.x = node.fx;
+      node.y = node.fy;
+      i++;
+    } else if (node.type==="csomópont"){
+      node.x = width/2 + 200 * Math.sin(j*2*pi/16);
+      node.y = height/2 + 200 * Math.cos(j*2*pi/16);
+      j++;
+    }
+  });
+  var center =  {
+    "id": "center",
+    "fx": width/2,
+    "fy": height/2,
+    "type": "középpont",
+    "r": 0,
+    "selected": false,
+    "rank": 0
+  };
+  graph.nodes.push(center);
+  var floaters = svg.append("g")
+      .attr("class", "nodes")
+    .selectAll("g")
+    .data(graph.nodes)
+    .enter().append("g");
+  var node = floaters.append("circle")
+      .attr("r", function(d) {return d.rank * (d.r + 10);})
+      .attr("fill", function(d) { return d.color; })
+      .attr("fill-opacity", function(d) {return d.opacity;})
+      .attr("cx", function(d) {return d.x;})
+      .attr("cy", function(d) {return d.y;})
+      .attr("z-index", -1)
+      .on("click", function(d,e,f){ selected(d,e,f) ;})
+      .call(d3.drag()
+          .on("start", dragstarted)
+          .on("drag", dragged)
+          .on("end", dragended));
+
+  
+  var label = floaters.append("text")
+      .text(function(d){ 
+        if(d.id.length > 10){
+          return d.id;
+        }else{
+          return d.id;
+        }
+      })
+      .attr("class", "label")
+      .attr("type", function(d){return d.type;});
+    
+    simulation.force("selectionCentering", function(alpha){
+      var whereTo = geomCenter(graph.nodes.filter(function(node){return node.selected}))
+      graph.nodes.forEach(function(d){
+        if (d.selected){
+          d.vx -= (whereTo.x-width/2)*alpha*0.5;
+          d.vy -= (whereTo.y-height/2)*alpha*0.5;
+        }
+      });
+    });
+    
+  node.append("title")
+      .text(function(d) { return d.id; });
+
+  simulation
+      .nodes(graph.nodes)
+      .on("tick", ticked);
+
+  simulation.force("link")
+      .links(graph.links)/*.strength(function(d){
+        if (d.target === "center"){
+          return 1 / Math.min(count(link.source), count(link.target))
+        } else {
+          return d.target.rank/2*3;
+        }
+      });*/
+
+
+  function ticked() {
+    link
+        .attr("x1", function(d) { return d.source.x; })
+        .attr("y1", function(d) { return d.source.y; })
+        .attr("x2", function(d) { return d.target.x; })
+        .attr("y2", function(d) { return d.target.y; });
+
+    floaters.selectAll("circle")
+        .attr("cx", function(d) { return d.x; })
+        .attr("cy", function(d) { return d.y; });
+
+    floaters.selectAll("text").filter("[type=csomópont]")
+        .attr("x", function(d,e,f) {
+          return incrDistance(
+            {"x": d.x, "y": d.y},
+            {"x": width/2, "y": height/2},
+            40).x;
+        })
+        .attr("y", function(d) {
+          return incrDistance(
+            {"x": d.x, "y": d.y},
+            {"x": width/2, "y": height/2},
+            0).y - d.r*d.rank-9;
+        })
+        .attr("font-size", "10pt");
+    floaters.selectAll("text").filter("[type=dimenzió]")
+        .attr("x", function(d,e,f) {
+          return d.x;
+        })
+        .attr("y", function(d,e,f) {
+          return d.y + 8;
+        })
+        .attr("font-size", "14pt");
+    var fanning = 30, eFactor = 0.8, padding = 30;
+    var outline = smoothOutline(convexHullCW(graph.nodes.filter(function(node){return node.selected;})), fanning, eFactor, padding);
+    backgroundPolygon.attr("points", svgPolygonFromOutline(outline));
+    //console.log(svgPolygonFromOutline(outline))
+  }
+  function selected(d,e,f) {
+    simulation.alpha(0.1);
+    console.log(d);
+    var newLinks = [];
+    if (d.type === "csomópont"){
+      d.selected = !d.selected;
+      if (d.selected){
+        f[e].setAttribute("fill-opacity", 1);
+      } else {
+        f[e].setAttribute("fill-opacity", 0.6);
+      }
+    
+      for (i = graph.links.length-1; i>=0; i--){
+        if (graph.links[i].target.id == d.id || graph.links[i].source.id == d.id){
+          graph.links.splice(i,1);
+        }
+      }
+
+      if (d.selected){
+        
+        //graph.links.push({"source": d, "target": center, "strength": 0.1, "focus": true});
+        graph.nodes.filter(function(node){return node.type == "dimenzió"}).forEach(function(dim){
+          //graph.links.push({"source": d, "target": dim, "focus": true})
+        })
+        simulation.force("link").links(graph.links);
+
+        graph.nodes.forEach(function(itnode){
+          if(itnode.selected && itnode.id !== d.id){
+            //console.log(itnode)
+            graph.links.push({"source": d,"target": itnode, "focus": true});
+            simulation.force("link").links(graph.links);
+          }
+        });
+        /*for (i = newLinks.length-1; i>=0; i--){
+          graph.links.forEach(function(link){
+            if (newLinks[i].target.id == link.target.id && newLinks[i].source.id == link.source.id || newLinks[i].source.id == link.target.id && newLinks[i].target.id == link.source.id){
+              console.log(newLinks[i])
+              newLinks.splice(i,1);
+            }
+          })
+        }*/
+
+      } else {
+        graph.links.push({
+          "source": d,
+          "target": d.parentnode,
+          "focus": false
+        });
+        simulation.force("link").links(graph.links);
+      }
+    
+    svg.selectAll("line")
+      .data(graph.links)
+        .exit()
+        .remove();
+
+    svg.selectAll("line")
+      .data(graph.links)
+        .enter().append("line").attr("stroke-width", 1)
+    }
+
+    simulation.force("charge").strength(function(d){
+      if (!d.selected) {
+        return charge
+      } else{
+        return charge
+      }
+    })
+  }
+});
+
+function dragstarted(d) {
+  if (!d3.event.active) simulation.alphaTarget(0.3).restart();
+  if (d.type !== "dimenzió") {
+    d.fx = d.x;
+    d.fy = d.y;
+  }
+}
+
+function dragged(d) {
+  if (d.type !== "dimenzió") {
+    d.fx = d3.event.x;
+    d.fy = d3.event.y;
+  }
+}
+
+function dragended(d) {
+  if (!d3.event.active) simulation.alphaTarget(0);
+  if (d.type !== "dimenzió") {
+    d.fx = null;
+    d.fy = null;
+  }
+}
+
+</script>
